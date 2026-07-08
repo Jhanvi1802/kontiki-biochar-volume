@@ -1,0 +1,13 @@
+# Kon-Tiki Biochar Volume — Python dependencies
+# Tested on Python 3.10. CPU is fine (no GPU needed to run the web app).
+#
+#   pip install -r requirements.txt
+#   python app.py
+
+flask
+numpy
+opencv-python
+pillow
+torch
+torchvision
+ultralytics

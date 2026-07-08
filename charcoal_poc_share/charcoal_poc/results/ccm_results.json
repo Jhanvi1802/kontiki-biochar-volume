@@ -1,0 +1,40 @@
+{
+ "track": "A_real_CCM",
+ "splits": {
+  "protocol": "container-disjoint",
+  "train_containers": [
+   1,
+   2,
+   4,
+   5
+  ],
+  "val_containers": [
+   3,
+   6
+  ],
+  "test_containers": [
+   7,
+   8
+  ]
+ },
+ "granular_split_sizes": {
+  "train": 428,
+  "val": 145,
+  "test": 87
+ },
+ "note": "No capacity/mass GT in C-CCM; absolute volume/weight come from Track B. Here we score container segmentation IoU on unseen containers (classical vs learned).",
+ "classical_container": {
+  "n": 87,
+  "mean_iou": 0.3876788934774708,
+  "median_iou": 0.40008251959840463,
+  "frac_above_0p5": 0.3103448275862069
+ },
+ "yolo_container": {
+  "n": 87,
+  "weights": "/home/ubuntu/poc-iot/runs/segment/contseg/weights/best.pt",
+  "mean_iou": 0.9007285814319873,
+  "median_iou": 0.9248490945674044,
+  "frac_above_0p5": 1.0,
+  "frac_above_0p9": 0.6781609195402298
+ }
+}

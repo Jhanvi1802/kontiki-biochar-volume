@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+kontiki_venv/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Auto-downloaded model weight — ultralytics fetches this on first run,
+# so it doesn't need to live in the repo.
+mobile_sam.pt
