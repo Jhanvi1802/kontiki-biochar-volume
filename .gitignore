@@ -16,3 +16,12 @@ Thumbs.db
 # Auto-downloaded model weight — ultralytics fetches this on first run,
 # so it doesn't need to live in the repo.
 mobile_sam.pt
+
+# Word temp/lock files
+~$*.docx
+
+# Dashboard runtime working directory (uploads/outputs)
+video_volume/dashboard/_work/
+
+# Large test point cloud (regenerate via the Colab notebook)
+dense.ply

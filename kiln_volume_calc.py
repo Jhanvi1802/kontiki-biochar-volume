@@ -5,7 +5,7 @@ import numpy as np
 
 # --- Kon-Tiki 1000 geometry (from design_Kon-Tiki 1000.pdf, FRONT ELEVATION) ---
 R   = 75.0     # top rim radius   (Ø1500 mm)
-RB  = 40.15    # bottom radius    (Ø803 mm) -> truncated cone (frustum)
+RB  = 41.15    # bottom radius    (Ø823 mm) -> truncated cone (frustum)
 H   = 93.0     # cone depth cm    (930 mm)
 DENS = 0.25    # biochar bulk density kg/L (typical 0.20-0.30)
 
