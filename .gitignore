@@ -25,3 +25,6 @@ video_volume/dashboard/_work/
 
 # Large test point cloud (regenerate via the Colab notebook)
 dense.ply
+
+# stray PDFs dropped into the project root
+/*.pdf
