@@ -110,17 +110,18 @@ print("1/3 extracting frames..."); paths = extract_frames(VIDEO); print("   ", l
 print("2/3 reconstructing 3-D (GPU)..."); world = reconstruct(paths); print("   ", len(world), "points")
 print("3/3 measuring volume...")
 save_ply("dense.ply", world)
-res = estimate_points(world, rim_radius_cm=75.0, views_png="kiln_views.png")
+res = estimate_points(world, rim_radius_cm=75.0, views_png="kiln_views.png", heatmap_png="kiln_heatmap.png")
 
 print("\\n" + "=" * 46)
 print(f"  BIOCHAR VOLUME : {res['volume_L']:6.0f} L    (~{res['weight_kg']:.0f} kg)")
 print(f"  fill level     : {res['fill_height_cm']:.0f} cm  ({res['fill_pct']:.0f}% of a ~1000 L kiln)")
 print(f"  cross-check    : {res['volume_L_flatfill']:6.0f} L   (should be close to the volume)")
+print(f"  SELF-CHECK     : {res['confidence'].upper()}")
+for w in res.get("warnings", []):
+    print(f"    ! {w}")
 print("=" * 46)
-gap = abs(res['volume_L'] - res['volume_L_flatfill']) / max(res['volume_L'], 1) * 100
-print(("OK: the two estimates agree (%.0f%%)." % gap) if gap < 8 else
-      ("WARNING: estimates disagree by %.0f%% -> cloud is noisy, re-shoot per the SOP." % gap))
-display(Image("kiln_views.png"))          # TOP should be a disk, SIDE a cone/bowl""")
+display(Image("kiln_views.png"))          # TOP = rim disk, SIDE = cone/bowl
+display(Image("kiln_heatmap.png"))        # biochar depth heatmap (volume = sum)""")
 
 md("""### Notes
 - **Rim scale:** assumes a standard Kon-Tiki 1000 rim (Ø150 cm). For other kilns, change

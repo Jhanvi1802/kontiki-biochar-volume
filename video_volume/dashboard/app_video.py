@@ -139,15 +139,18 @@ def analyze():
         gap = abs(V - Vf) / max(V, 1) * 100
         band = max(gap / 100 * V, 20)
         fill = max(0, min(100, res["fill_pct"]))
-        ok = gap < 8
-        trust = (f"<span class=badge>✓ Consistent — estimates agree ({gap:.0f}%)</span>" if ok
-                 else f"<span class=badgew>⚠ Estimates disagree {gap:.0f}% — cloud noisy, re-shoot per SOP</span>")
-        rimtxt = "≈ correct (~75 cm)" if 0.7 < res["scale_cm_per_unit"] else ""
+        conf = res.get("confidence", "?")
+        trust = (f"<span class=badge>self-check: {conf.upper()}</span>" if conf == "good"
+                 else f"<span class=badgew>self-check: {conf.upper()}</span>")
+        warns = res.get("warnings", [])
+        warn_html = ("<div class=note style='color:#ffb454'>"
+                     + "".join("• " + w + "<br>" for w in warns) + "</div>") if warns else ""
         result = f"""<div class=card><div class=grid>
           <div>
             <div class=lab>Estimated biochar volume</div>
             <div class=big>{V:,.0f} L</div>
             <div class=conf>± {band:,.0f} L &nbsp; {trust}</div>
+            {warn_html}
             <div class=kg>≈ {V*DENSITY:,.0f} kg · {V/1000:.2f} m³</div>
             <div class=lab style=margin-top:16px>Fill (of ~{Vfull:.0f} L kiln)</div>
             <div class=gauge><div class=gfill style=width:{fill:.0f}%></div></div>

@@ -10,6 +10,11 @@ step) and returns the biochar volume in litres. Pure geometry:
 
 Same logic the Colab notebook uses; it runs here on CPU because it is not GPU work.
 
+It also returns a `confidence` self-check and `warnings` (bad scale, incomplete orbit,
+wrong-shaped kiln, noisy surface) so a poor capture is flagged, not silently trusted.
+NOTE: scale currently comes from the known rim (Ø1500 mm); a physical 1-metre marker in
+the video is the planned way to remove that assumption (not yet auto-detected).
+
 Usage:  python estimate_volume.py cloud.ply [rim_radius_cm] [views.png]
 """
 import sys, numpy as np
@@ -34,6 +39,7 @@ def rot_from_to(a, b):
 
 
 def fit_circle(xy):
+    """Least-squares circle -> (cx, cy, r). Robust enough for a partial arc."""
     x, y = xy[:, 0], xy[:, 1]
     A = np.c_[2 * x, 2 * y, np.ones(len(x))]; b = x ** 2 + y ** 2
     c, *_ = np.linalg.lstsq(A, b, rcond=None)
@@ -93,8 +99,20 @@ def _wall_depth(rr):
 
 
 def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, debug=False):
+    warn = []
+    def result(**kw):
+        base = dict(volume_L=0.0, volume_L_flatfill=0.0, fill_height_cm=0.0,
+                    fill_pct=0.0, weight_kg=0.0, measured_rim_units=float("nan"),
+                    scale_cm_per_unit=float("nan"), cone_slope=float("nan"),
+                    angular_coverage=0.0, agree_pct=float("nan"),
+                    confidence="unreliable", warnings=list(warn))
+        base.update(kw); return base
+
     P = np.asarray(P, float)
     P = P[np.isfinite(P).all(1)]
+    if len(P) < 500:
+        warn.append(f"too few 3-D points ({len(P)}) - reconstruction likely failed")
+        return result()
     med = np.median(P, 0); d = np.linalg.norm(P - med, axis=1)
     P = P[d < np.percentile(d, 98)]
     diag = float(np.linalg.norm(P.max(0) - P.min(0)))
@@ -105,6 +123,9 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
 
     # 1) up direction from the dominant plane (ground or biochar surface -> same normal)
     n, _ = _segment_plane(P, thr=max(2.5 * spacing, 0.003 * diag))
+    if n is None:
+        warn.append("could not find a reference plane in the scene")
+        return result()
     R1 = rot_from_to(n, np.array([0, 0, 1.0]))
     Q = P @ R1.T
     z = Q[:, 2]; zr = z.max() - z.min()
@@ -128,8 +149,14 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
 
     # 3) drop the ground sheet, keep the largest cluster (the kiln)
     kiln = Q[z > ground_z + max(3 * spacing, 0.02 * zr)]
+    if len(kiln) < 200:
+        warn.append("no kiln-like structure found above the ground")
+        return result()
     idx = _largest_cluster(kiln, eps=3.0 * spacing)
     K = kiln[idx]
+    if len(K) < 200:
+        warn.append(f"kiln not clearly isolated ({len(K)} points)")
+        return result()
 
     # 3b) refine the axis: the kiln is a surface of revolution, so its symmetry
     # axis is the smallest-variance PCA direction (robust vs a tilted plane fit).
@@ -139,12 +166,25 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
     if axis @ np.array([0, 0, 1.0]) < 0:
         axis = -axis
     K = (K - c0) @ rot_from_to(axis, np.array([0, 0, 1.0])).T
-    # rim (wide end) must be at +Z: radius should grow with height
     rho = np.hypot(K[:, 0], K[:, 1])
-    if np.corrcoef(K[:, 2], rho)[0, 1] < 0:
-        K[:, 2] *= -1.0
+    if np.std(K[:, 2]) > 1e-9 and np.std(rho) > 1e-9 and np.corrcoef(K[:, 2], rho)[0, 1] < 0:
+        K[:, 2] *= -1.0                              # rim (wide end) must sit at +Z
+
+    # angular coverage (scale-free) — fit the rim-ring centre, then check the top
+    # ring spans a full orbit. Measured around the FITTED centre, not the PCA mean
+    # (which sits off-axis for a one-sided/partial arc and would hide the gap).
+    top = K[K[:, 2] >= np.percentile(K[:, 2], 85)]
+    if len(top) >= 10:
+        cxr, cyr, _ = fit_circle(top[:, :2])
+    else:
+        cxr, cyr = 0.0, 0.0
+    ang = np.arctan2(top[:, 1] - cyr, top[:, 0] - cxr)
+    occ = np.histogram(ang, bins=36, range=(-np.pi, np.pi))[0]
+    coverage = float((occ > max(2, 0.1 * len(top) / 36)).mean())
+    if coverage < 0.75:
+        warn.append(f"incomplete orbit - only ~{100 * coverage:.0f}% of the kiln rim captured")
     if debug:
-        print(f"  [debug] spacing={spacing:.3f} n_kiln={len(K)}/{len(kiln)} axis_z={axis[2]:.3f}")
+        print(f"  [debug] spacing={spacing:.3f} n_kiln={len(K)}/{len(kiln)} cover={coverage:.2f}")
 
     # 4) fit the kiln WALL cone -> rim radius & plane -> scale to cm (axis at origin).
     # The wall's max-radius-vs-height is a straight line; extrapolate to the top.
@@ -158,10 +198,20 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
             continue
         zz.append(0.5 * (zb[i] + zb[i + 1])); rr.append(np.percentile(rho[m], 98))
     zz, rr = np.array(zz), np.array(rr)
+    if len(zz) < 3:
+        warn.append("kiln wall not resolved - cannot set the scale")
+        return result(angular_coverage=coverage)
     m_slope, c_int = np.linalg.lstsq(np.c_[zz, np.ones_like(zz)], rr, rcond=None)[0]
     z_rim = float(np.percentile(zk, 99.5))
     r_units = m_slope * z_rim + c_int
+    if not np.isfinite(r_units) or r_units <= 1e-6:
+        warn.append("scale could not be recovered (bad rim fit)")
+        return result(angular_coverage=coverage, cone_slope=float(m_slope))
     s = rim_radius_cm / r_units
+    exp_slope = (R_CM - RB_CM) / H_CM                # cone-shape sanity (scale-free)
+    if not (0.7 <= m_slope / exp_slope <= 1.4):
+        warn.append(f"shape unlike a Kon-Tiki cone (wall slope {m_slope:.2f} vs {exp_slope:.2f}) "
+                    "- wrong kiln or poor capture")
     if debug:
         print(f"  [debug] slope={m_slope:.3f} r_units={r_units:.3f} s={s:.4f}")
     K = (K - np.array([0.0, 0.0, z_rim])) * s
@@ -189,6 +239,7 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
         cells.append(key); depths.append(np.percentile(v, TOP_PCT))   # top = biochar surface
     if len(cells) < 30:                               # essentially empty kiln
         V_L = V_simple = h_fill = 0.0
+        warn.append("no biochar surface detected (kiln looks empty)")
     else:
         cells = np.array(cells); depths = np.array(depths)
         centers = (cells + 0.5) * CELL - R_CM
@@ -213,6 +264,19 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
             p = np.percentile(depths, [10, 50, 90])
             print(f"  [debug] cells={len(depths)} top_depth p10/50/90="
                   f"{p[0]:.0f}/{p[1]:.0f}/{p[2]:.0f} V={V_L:.0f} Vflat={V_simple:.0f}")
+
+    gap = abs(V_L - V_simple) / max(V_L, 1.0) * 100.0
+    if V_L > 1 and gap > 12:
+        warn.append(f"surface noisy - integrated vs flat-fill disagree by {gap:.0f}%")
+    txt = " ".join(warn)
+    if V_L <= 1:
+        conf = "unreliable"
+    elif ("scale" in txt) or ("shape unlike" in txt) or ("incomplete orbit" in txt):
+        conf = "low"
+    elif gap > 12:
+        conf = "medium"
+    else:
+        conf = "good"
 
     if views_png or heatmap_png:
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
@@ -246,9 +310,11 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
         ax.set_aspect("equal", "box")
         fig.tight_layout(); fig.savefig(heatmap_png, dpi=130); plt.close(fig)
 
-    return {"volume_L": V_L, "volume_L_flatfill": V_simple, "fill_height_cm": h_fill,
-            "fill_pct": 100 * V_L / V_full, "weight_kg": DENSITY * V_L,
-            "measured_rim_units": r_units, "scale_cm_per_unit": s}
+    return result(volume_L=V_L, volume_L_flatfill=V_simple, fill_height_cm=h_fill,
+                  fill_pct=100 * V_L / V_full, weight_kg=DENSITY * V_L,
+                  measured_rim_units=float(r_units), scale_cm_per_unit=float(s),
+                  cone_slope=float(m_slope), angular_coverage=coverage,
+                  agree_pct=float(gap), confidence=conf)
 
 
 def estimate(ply_path, rim_radius_cm=R_CM, views_png=None, heatmap_png=None):
@@ -266,6 +332,9 @@ def _print(res):
     print(f"  fill height / fill %        : {res['fill_height_cm']:.0f} cm / {res['fill_pct']:.0f}%")
     print(f"  approx weight (~0.25 kg/L)  : {res['weight_kg']:6.0f} kg")
     print(f"  scale                       : {res['scale_cm_per_unit']:.4f} cm/unit")
+    print(f"  self-check                  : {res['confidence'].upper()}")
+    for w in res.get("warnings", []):
+        print(f"    ! {w}")
     print("=" * 46)
 
 

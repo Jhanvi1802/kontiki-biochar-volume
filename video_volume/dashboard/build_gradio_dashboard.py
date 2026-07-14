@@ -90,17 +90,21 @@ def process(video):
     except Exception as e:
         return f"<p style='color:#b00'>Could not process this video: {e}</p>", None, None
     V, Vf = res["volume_L"], res["volume_L_flatfill"]
-    gap = abs(V - Vf) / max(V, 1) * 100; fill = max(0, min(100, res["fill_pct"]))
-    trust = (f"<span style='color:#2e7d33'>&#10003; estimates agree ({gap:.0f}%)</span>" if gap < 8
-             else f"<span style='color:#c60'>&#9888; estimates disagree {gap:.0f}% &mdash; re-shoot per the SOP</span>")
+    fill = max(0, min(100, res["fill_pct"]))
+    conf = res.get("confidence", "?")
+    ccol = {"good": "#2e7d33", "medium": "#c60", "low": "#c0392b", "unreliable": "#c0392b"}.get(conf, "#666")
+    warns = "".join(f"<li>{w}</li>" for w in res.get("warnings", []))
+    warn_html = f"<ul style='color:#c60;margin:6px 0 0;padding-left:18px;font-size:13px'>{warns}</ul>" if warns else ""
     html = f"""<div style="font-family:system-ui,Segoe UI,Arial">
       <div style="font-size:13px;letter-spacing:1px;color:#888">ESTIMATED BIOCHAR VOLUME</div>
       <div style="font-size:54px;font-weight:800;color:#2e7d33;line-height:1">{V:,.0f} L</div>
       <div style="color:#555;margin-top:4px">&#8776; {V*0.25:,.0f} kg &middot; {V/1000:.2f} m&sup3;</div>
-      <div style="margin-top:12px;font-size:13px;color:#888">FILL &mdash; {fill:.0f}% of a ~998 L kiln (height {res['fill_height_cm']:.0f} cm)</div>
+      <div style="margin-top:12px;font-size:13px;color:#888">FILL &mdash; {fill:.0f}% of a ~1000 L kiln (height {res['fill_height_cm']:.0f} cm)</div>
       <div style="height:16px;background:#eee;border-radius:9px;overflow:hidden;margin-top:4px">
         <div style="height:100%;width:{fill:.0f}%;background:linear-gradient(90deg,#2d7ef7,#4fe08a)"></div></div>
-      <div style="margin-top:12px">cross-check {Vf:,.0f} L &nbsp; {trust}</div>
+      <div style="margin-top:12px">cross-check {Vf:,.0f} L</div>
+      <div style="margin-top:10px;font-weight:700;color:{ccol}">Self-check: {conf.upper()}</div>
+      {warn_html}
     </div>"""
     return html, "views.png", "heatmap.png"
 

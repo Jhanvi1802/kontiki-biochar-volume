@@ -27,14 +27,15 @@ def _rand_rot(rng):
 
 
 def make(h_fill, n_wall=30000, n_surf=25000, n_ground=25000, heap_cm=0.0,
-         noise=0.3, transform=True, seed=0):
+         noise=0.3, transform=True, seed=0, arc_deg=360.0):
     rng = np.random.default_rng(seed)
+    arc = np.radians(arc_deg)                          # <360 = partial orbit
     # frustum wall, radius r(z) = RB + (R-RB) z/H, over full depth
-    z = rng.uniform(0, H, n_wall); r = RB + (R - RB) * z / H; th = rng.uniform(0, 2 * np.pi, n_wall)
+    z = rng.uniform(0, H, n_wall); r = RB + (R - RB) * z / H; th = rng.uniform(0, arc, n_wall)
     wall = np.c_[r * np.cos(th), r * np.sin(th), z]
     # biochar top surface at z=h_fill, radius r_s, with a parabolic heap
     rs = RB + (R - RB) * h_fill / H
-    u = np.sqrt(rng.uniform(0, 1, n_surf)); rr = rs * u; ph = rng.uniform(0, 2 * np.pi, n_surf)
+    u = np.sqrt(rng.uniform(0, 1, n_surf)); rr = rs * u; ph = rng.uniform(0, arc, n_surf)
     zz = h_fill + heap_cm * (1 - u ** 2)
     surf = np.c_[rr * np.cos(ph), rr * np.sin(ph), zz]
     # wide ground plane at z=0 outside the kiln footprint
