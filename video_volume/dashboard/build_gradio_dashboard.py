@@ -42,7 +42,7 @@ import gradio as gr
 print("loading VGGT model (once)...")
 MODEL = VGGT.from_pretrained("facebook/VGGT-1B").to("cuda").eval()
 
-def extract_frames(video, n=32, out="frames"):
+def extract_frames(video, n=40, out="frames"):
     if os.path.exists(out): shutil.rmtree(out)
     os.makedirs(out)
     cap = cv2.VideoCapture(video); total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -98,7 +98,7 @@ def process(video):
     html = f"""<div style="font-family:system-ui,Segoe UI,Arial">
       <div style="font-size:13px;letter-spacing:1px;color:#888">ESTIMATED BIOCHAR VOLUME</div>
       <div style="font-size:54px;font-weight:800;color:#2e7d33;line-height:1">{V:,.0f} L</div>
-      <div style="color:#555;margin-top:4px">&#8776; {V*0.25:,.0f} kg &middot; {V/1000:.2f} m&sup3;</div>
+      <div style="color:#555;margin-top:4px">&#8776; {res['weight_kg']:,.0f} kg &middot; {V/1000:.2f} m&sup3;</div>
       <div style="margin-top:12px;font-size:13px;color:#888">FILL &mdash; {fill:.0f}% of a ~1000 L kiln (height {res['fill_height_cm']:.0f} cm)</div>
       <div style="height:16px;background:#eee;border-radius:9px;overflow:hidden;margin-top:4px">
         <div style="height:100%;width:{fill:.0f}%;background:linear-gradient(90deg,#2d7ef7,#4fe08a)"></div></div>

@@ -98,13 +98,14 @@ def _wall_depth(rr):
     return np.where(rr <= RB_CM, H_CM, (R_CM - rr) / (R_CM - RB_CM) * H_CM)
 
 
-def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, debug=False):
+def estimate_points(P, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heatmap_png=None, debug=False):
     warn = []
     def result(**kw):
         base = dict(volume_L=0.0, volume_L_flatfill=0.0, fill_height_cm=0.0,
                     fill_pct=0.0, weight_kg=0.0, measured_rim_units=float("nan"),
                     scale_cm_per_unit=float("nan"), cone_slope=float("nan"),
                     angular_coverage=0.0, agree_pct=float("nan"),
+                    wall_fit_r2=float("nan"), density_kg_per_L=density,
                     confidence="unreliable", warnings=list(warn))
         base.update(kw); return base
 
@@ -202,11 +203,16 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
         warn.append("kiln wall not resolved - cannot set the scale")
         return result(angular_coverage=coverage)
     m_slope, c_int = np.linalg.lstsq(np.c_[zz, np.ones_like(zz)], rr, rcond=None)[0]
+    _pred = m_slope * zz + c_int                     # how straight-conical is the wall?
+    _sst = float(np.sum((rr - rr.mean()) ** 2))
+    wall_r2 = float(1 - np.sum((rr - _pred) ** 2) / _sst) if _sst > 1e-9 else 0.0
+    if wall_r2 < 0.80:
+        warn.append(f"kiln wall poorly resolved (fit R2={wall_r2:.2f}) - scale uncertain")
     z_rim = float(np.percentile(zk, 99.5))
     r_units = m_slope * z_rim + c_int
     if not np.isfinite(r_units) or r_units <= 1e-6:
         warn.append("scale could not be recovered (bad rim fit)")
-        return result(angular_coverage=coverage, cone_slope=float(m_slope))
+        return result(angular_coverage=coverage, cone_slope=float(m_slope), wall_fit_r2=wall_r2)
     s = rim_radius_cm / r_units
     exp_slope = (R_CM - RB_CM) / H_CM                # cone-shape sanity (scale-free)
     if not (0.7 <= m_slope / exp_slope <= 1.4):
@@ -311,18 +317,19 @@ def estimate_points(P, rim_radius_cm=R_CM, views_png=None, heatmap_png=None, deb
         fig.tight_layout(); fig.savefig(heatmap_png, dpi=130); plt.close(fig)
 
     return result(volume_L=V_L, volume_L_flatfill=V_simple, fill_height_cm=h_fill,
-                  fill_pct=100 * V_L / V_full, weight_kg=DENSITY * V_L,
+                  fill_pct=100 * V_L / V_full, weight_kg=density * V_L,
                   measured_rim_units=float(r_units), scale_cm_per_unit=float(s),
                   cone_slope=float(m_slope), angular_coverage=coverage,
-                  agree_pct=float(gap), confidence=conf)
+                  agree_pct=float(gap), wall_fit_r2=wall_r2, confidence=conf)
 
 
-def estimate(ply_path, rim_radius_cm=R_CM, views_png=None, heatmap_png=None):
+def estimate(ply_path, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heatmap_png=None):
     import open3d as o3d
     pcd = o3d.io.read_point_cloud(ply_path)
     if len(pcd.points) == 0:
         raise SystemExit("empty point cloud")
-    return estimate_points(np.asarray(pcd.points), rim_radius_cm, views_png, heatmap_png)
+    return estimate_points(np.asarray(pcd.points), rim_radius_cm=rim_radius_cm,
+                           density=density, views_png=views_png, heatmap_png=heatmap_png)
 
 
 def _print(res):

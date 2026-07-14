@@ -18,6 +18,8 @@ CASES = [
     dict(h_fill=60, heap_cm=8,  seed=5),   # heaped surface
     dict(h_fill=45, heap_cm=12, seed=6),   # heaped surface
     dict(h_fill=75, heap_cm=0,  transform=False, seed=7),  # no transform
+    dict(h_fill=80, heap_cm=5,  interior_n=15000, noise=0.6, seed=8),  # deep artefacts + noise
+    dict(h_fill=55, heap_cm=0,  interior_n=10000, noise=0.6, seed=9),  # deep artefacts + noise
 ]
 
 print(f"{'fill':>5}{'heap':>5}{'true_L':>9}{'est_L':>8}{'flat_L':>8}{'err%':>7}")

@@ -49,7 +49,7 @@ import torchvision
 print("Setup ready | GPU:", torch.cuda.get_device_name(0),
       "| torch", torch.__version__, "| torchvision", torchvision.__version__)
 
-def extract_frames(video, n=32, out="frames"):
+def extract_frames(video, n=40, out="frames"):
     if os.path.exists(out): shutil.rmtree(out)
     os.makedirs(out)
     cap = cv2.VideoCapture(video); total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)

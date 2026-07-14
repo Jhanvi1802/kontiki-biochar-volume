@@ -27,7 +27,7 @@ def _rand_rot(rng):
 
 
 def make(h_fill, n_wall=30000, n_surf=25000, n_ground=25000, heap_cm=0.0,
-         noise=0.3, transform=True, seed=0, arc_deg=360.0):
+         noise=0.3, transform=True, seed=0, arc_deg=360.0, interior_n=0):
     rng = np.random.default_rng(seed)
     arc = np.radians(arc_deg)                          # <360 = partial orbit
     # frustum wall, radius r(z) = RB + (R-RB) z/H, over full depth
@@ -42,7 +42,13 @@ def make(h_fill, n_wall=30000, n_surf=25000, n_ground=25000, heap_cm=0.0,
     gx = rng.uniform(-1.5 * R, 1.5 * R, n_ground); gy = rng.uniform(-1.5 * R, 1.5 * R, n_ground)
     keep = np.hypot(gx, gy) > R * 1.03
     ground = np.c_[gx[keep], gy[keep], np.zeros(keep.sum())]
-    P = np.vstack([wall, surf, ground]).astype(float)
+    parts = [wall, surf, ground]
+    if interior_n:                                     # deep interior artefacts (VGGT-like)
+        zi = rng.uniform(H * 0.1, max(h_fill, H * 0.15), interior_n)
+        rmax = RB + (R - RB) * zi / H
+        ri = rmax * np.sqrt(rng.uniform(0, 1, interior_n)); ti = rng.uniform(0, arc, interior_n)
+        parts.append(np.c_[ri * np.cos(ti), ri * np.sin(ti), zi])
+    P = np.vstack(parts).astype(float)
     P += rng.normal(0, noise, P.shape)
     if transform:
         P = (P @ _rand_rot(rng).T) * rng.uniform(0.3, 3.0) + rng.uniform(-40, 40, 3)
