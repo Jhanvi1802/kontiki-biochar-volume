@@ -7,7 +7,9 @@ Run:  python build_gradio_dashboard.py
 import json, os, base64
 
 _EST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "estimate_volume.py")
+_ARUCO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "aruco_tools.py")
 EST_B64 = base64.b64encode(open(_EST, "rb").read()).decode("ascii")
+ARUCO_B64 = base64.b64encode(open(_ARUCO, "rb").read()).decode("ascii")
 CELLS = []
 def md(s):   CELLS.append({"cell_type": "markdown", "metadata": {}, "source": s})
 def code(s): CELLS.append({"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": s})
@@ -32,7 +34,14 @@ if "vggt" not in sys.path: sys.path.append("vggt")
 assert torch.cuda.is_available(), "No GPU. Runtime > Change runtime type > GPU (T4), then re-run."
 
 open("estimate_volume.py", "w", encoding="utf-8").write(base64.b64decode("__EST_B64__").decode("utf-8"))
+open("aruco_tools.py", "w", encoding="utf-8").write(base64.b64decode("__ARUCO_B64__").decode("utf-8"))
 from estimate_volume import estimate_points
+import aruco_tools
+
+# >>> set this to the MEASURED edge length (cm) of your printed ArUco marker <<<
+# (if you are not using a marker yet, leave it - scale then falls back to the rim)
+MARKER_CM = 20.0
+
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -73,20 +82,33 @@ def reconstruct(paths):
         raise KeyError(ks)
     extr, intr = pose_encoding_to_extri_intri(gk(pred, "pose_enc"), imgs.shape[-2:])
     depth = gk(pred, "depth", "depth_map"); conf = gk(pred, "depth_conf", "point_conf", "depth_confidence")
-    w = np.asarray(unproject_depth_map_to_point_map(depth.squeeze(0), extr.squeeze(0), intr.squeeze(0))).reshape(-1, 3)
-    conf = conf.squeeze(0).float().cpu().numpy().reshape(-1)
-    w = w[(conf >= np.quantile(conf, 0.5)) & np.isfinite(w).all(1)]
+    wp = np.asarray(unproject_depth_map_to_point_map(depth.squeeze(0), extr.squeeze(0), intr.squeeze(0)))  # [N,H,W,3]
+    cf = conf.squeeze(0).float().cpu().numpy()                    # [N,H,W]
+
+    aruco_scale = None                                            # metric scale from markers (optional)
+    try:
+        im = imgs.detach().float().cpu().numpy().transpose(0, 2, 3, 1)          # [N,H,W,3]
+        u8 = [((a - a.min()) / (a.max() - a.min() + 1e-9) * 255).astype("uint8") for a in im]
+        rr = aruco_tools.scale_from_marker(u8, wp, MARKER_CM)
+        if rr:
+            aruco_scale = rr["scale_cm_per_unit"]; print("ArUco metric scale:", rr)
+    except Exception as e:
+        print("ArUco scale skipped:", e)
+
+    w = wp.reshape(-1, 3); cff = cf.reshape(-1)
+    w = w[(cff >= np.quantile(cff, 0.5)) & np.isfinite(w).all(1)]
     if len(w) > 300000:
         w = w[np.random.default_rng(0).choice(len(w), 300000, replace=False)]
-    return w
+    return w, aruco_scale
 
 def process(video):
     if not video:
         return "<p>Please upload a kiln video.</p>", None, None
     try:
         paths = extract_frames(video)
-        world = reconstruct(paths)
-        res = estimate_points(world, rim_radius_cm=75.0, views_png="views.png", heatmap_png="heatmap.png")
+        world, aruco_scale = reconstruct(paths)
+        res = estimate_points(world, rim_radius_cm=75.0, scale_cm_per_unit=aruco_scale,
+                              views_png="views.png", heatmap_png="heatmap.png")
     except Exception as e:
         return f"<p style='color:#b00'>Could not process this video: {e}</p>", None, None
     V, Vf = res["volume_L"], res["volume_L_flatfill"]
@@ -102,7 +124,7 @@ def process(video):
       <div style="margin-top:12px;font-size:13px;color:#888">FILL &mdash; {fill:.0f}% of a ~1000 L kiln (height {res['fill_height_cm']:.0f} cm)</div>
       <div style="height:16px;background:#eee;border-radius:9px;overflow:hidden;margin-top:4px">
         <div style="height:100%;width:{fill:.0f}%;background:linear-gradient(90deg,#2d7ef7,#4fe08a)"></div></div>
-      <div style="margin-top:12px">cross-check {Vf:,.0f} L</div>
+      <div style="margin-top:12px">cross-check {Vf:,.0f} L &middot; scale from {res.get('scale_source','?')}</div>
       <div style="margin-top:10px;font-weight:700;color:{ccol}">Self-check: {conf.upper()}</div>
       {warn_html}
     </div>"""
@@ -118,12 +140,21 @@ demo = gr.Interface(
     description="Upload a slow orbit video of the biochar-filled kiln. It extracts frames, reconstructs the 3-D shape on GPU, and returns the biochar volume. Follow the capture SOP for best accuracy.")
 print("launching dashboard - a public https://....gradio.live link will appear below")
 demo.launch(share=True)
-'''.replace("__EST_B64__", EST_B64)
+'''.replace("__EST_B64__", EST_B64).replace("__ARUCO_B64__", ARUCO_B64)
 
 code(CELL)
 
-md("""### Notes
-- The **public link** works from any device (phone/laptop) for ~72 h while this cell runs.
+md("""### ArUco marker = true scale (recommended)
+The result shows **"scale from marker"** or **"scale from rim (assumed)"**. To get the size
+read from the *video itself* (not assumed), use ArUco markers:
+1. Print the markers (`video_volume/markers/aruco_*.png`) on **matte** paper.
+2. **Measure the black square's real edge with a ruler** and set `MARKER_CM` in Cell 1 to that value (cm).
+3. Lay **3–4 markers flat on the ground** around the kiln, ~90° apart, different IDs (so one is always visible), **after quenching**.
+4. Record the slow orbit as usual — the dashboard detects them and scales metrically.
+No markers? It falls back to the assumed rim (fine for a standard Kon-Tiki 1000).
+
+### Notes
+- The **public link** works from any device for ~72 h while this cell runs.
 - Keep this Colab tab open; closing it stops the dashboard. Re-run the cell to restart.
 - For an **always-on** dashboard (no Colab), deploy the same app to a **GPU host**
   (Hugging Face Spaces GPU / Modal) — ask and I'll provide `gradio_app.py` + steps.

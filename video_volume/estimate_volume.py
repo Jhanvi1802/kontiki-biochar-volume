@@ -98,12 +98,13 @@ def _wall_depth(rr):
     return np.where(rr <= RB_CM, H_CM, (R_CM - rr) / (R_CM - RB_CM) * H_CM)
 
 
-def estimate_points(P, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heatmap_png=None, debug=False):
+def estimate_points(P, rim_radius_cm=R_CM, density=DENSITY, scale_cm_per_unit=None,
+                    views_png=None, heatmap_png=None, debug=False):
     warn = []
     def result(**kw):
         base = dict(volume_L=0.0, volume_L_flatfill=0.0, fill_height_cm=0.0,
                     fill_pct=0.0, weight_kg=0.0, measured_rim_units=float("nan"),
-                    scale_cm_per_unit=float("nan"), cone_slope=float("nan"),
+                    scale_cm_per_unit=float("nan"), scale_source="rim", cone_slope=float("nan"),
                     angular_coverage=0.0, agree_pct=float("nan"),
                     wall_fit_r2=float("nan"), density_kg_per_L=density,
                     confidence="unreliable", warnings=list(warn))
@@ -213,13 +214,21 @@ def estimate_points(P, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heat
     if not np.isfinite(r_units) or r_units <= 1e-6:
         warn.append("scale could not be recovered (bad rim fit)")
         return result(angular_coverage=coverage, cone_slope=float(m_slope), wall_fit_r2=wall_r2)
-    s = rim_radius_cm / r_units
+    s_rim = rim_radius_cm / r_units                  # scale if we assume the standard rim
+    if scale_cm_per_unit is not None and np.isfinite(scale_cm_per_unit) and scale_cm_per_unit > 0:
+        s = float(scale_cm_per_unit); scale_src = "marker"     # true metric scale from ArUco
+        disc = abs(s - s_rim) / max(s, 1e-9) * 100.0           # marker-vs-rim cross-check
+        if disc > 15:
+            warn.append(f"marker scale vs assumed-rim disagree by {disc:.0f}% "
+                        "- kiln may be non-standard (trusting the marker)")
+    else:
+        s = s_rim; scale_src = "rim (assumed 150 cm)"
     exp_slope = (R_CM - RB_CM) / H_CM                # cone-shape sanity (scale-free)
     if not (0.7 <= m_slope / exp_slope <= 1.4):
         warn.append(f"shape unlike a Kon-Tiki cone (wall slope {m_slope:.2f} vs {exp_slope:.2f}) "
                     "- wrong kiln or poor capture")
     if debug:
-        print(f"  [debug] slope={m_slope:.3f} r_units={r_units:.3f} s={s:.4f}")
+        print(f"  [debug] slope={m_slope:.3f} r_units={r_units:.3f} s={s:.4f} scale_src={scale_src}")
     K = (K - np.array([0.0, 0.0, z_rim])) * s
 
     # 5) TOP-surface heightmap over the rim disk, integrated against the known cone.
@@ -320,16 +329,19 @@ def estimate_points(P, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heat
                   fill_pct=100 * V_L / V_full, weight_kg=density * V_L,
                   measured_rim_units=float(r_units), scale_cm_per_unit=float(s),
                   cone_slope=float(m_slope), angular_coverage=coverage,
-                  agree_pct=float(gap), wall_fit_r2=wall_r2, confidence=conf)
+                  agree_pct=float(gap), wall_fit_r2=wall_r2, scale_source=scale_src,
+                  confidence=conf)
 
 
-def estimate(ply_path, rim_radius_cm=R_CM, density=DENSITY, views_png=None, heatmap_png=None):
+def estimate(ply_path, rim_radius_cm=R_CM, density=DENSITY, scale_cm_per_unit=None,
+             views_png=None, heatmap_png=None):
     import open3d as o3d
     pcd = o3d.io.read_point_cloud(ply_path)
     if len(pcd.points) == 0:
         raise SystemExit("empty point cloud")
     return estimate_points(np.asarray(pcd.points), rim_radius_cm=rim_radius_cm,
-                           density=density, views_png=views_png, heatmap_png=heatmap_png)
+                           density=density, scale_cm_per_unit=scale_cm_per_unit,
+                           views_png=views_png, heatmap_png=heatmap_png)
 
 
 def _print(res):

@@ -7,7 +7,9 @@ Run:  python build_notebook.py
 import json, os, base64
 
 _EST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "estimate_volume.py")
+_ARUCO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "aruco_tools.py")
 EST_B64 = base64.b64encode(open(_EST, "rb").read()).decode("ascii")
+ARUCO_B64 = base64.b64encode(open(_ARUCO, "rb").read()).decode("ascii")
 CELLS = []
 def md(src):   CELLS.append({"cell_type": "markdown", "metadata": {}, "source": src})
 def code(src): CELLS.append({"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": src})
@@ -38,7 +40,10 @@ assert torch.cuda.is_available(), "No GPU. Runtime > Change runtime type > GPU (
 
 # the tested volume engine (embedded, byte-identical to estimate_volume.py)
 open("estimate_volume.py", "w", encoding="utf-8").write(base64.b64decode("{EST_B64}").decode("utf-8"))
+open("aruco_tools.py", "w", encoding="utf-8").write(base64.b64decode("{ARUCO_B64}").decode("utf-8"))
 from estimate_volume import estimate_points
+import aruco_tools
+MARKER_CM = 20.0   # measured edge (cm) of your printed ArUco marker; ignored if no marker used
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -80,12 +85,22 @@ def reconstruct(paths):
         raise KeyError(ks)
     extr, intr = pose_encoding_to_extri_intri(gk(pred, "pose_enc"), imgs.shape[-2:])
     depth = gk(pred, "depth", "depth_map"); conf = gk(pred, "depth_conf", "point_conf", "depth_confidence")
-    w = np.asarray(unproject_depth_map_to_point_map(depth.squeeze(0), extr.squeeze(0), intr.squeeze(0))).reshape(-1, 3)
-    conf = conf.squeeze(0).float().cpu().numpy().reshape(-1)
-    w = w[(conf >= np.quantile(conf, 0.5)) & np.isfinite(w).all(1)]
+    wp = np.asarray(unproject_depth_map_to_point_map(depth.squeeze(0), extr.squeeze(0), intr.squeeze(0)))
+    cf = conf.squeeze(0).float().cpu().numpy()
+    aruco_scale = None
+    try:
+        im = imgs.detach().float().cpu().numpy().transpose(0, 2, 3, 1)
+        u8 = [((a - a.min()) / (a.max() - a.min() + 1e-9) * 255).astype("uint8") for a in im]
+        _r = aruco_tools.scale_from_marker(u8, wp, MARKER_CM)
+        if _r:
+            aruco_scale = _r["scale_cm_per_unit"]; print("ArUco metric scale:", _r)
+    except Exception as e:
+        print("ArUco scale skipped:", e)
+    w = wp.reshape(-1, 3); cff = cf.reshape(-1)
+    w = w[(cff >= np.quantile(cff, 0.5)) & np.isfinite(w).all(1)]
     if len(w) > 300000:
         w = w[np.random.default_rng(0).choice(len(w), 300000, replace=False)]
-    return w
+    return w, aruco_scale
 
 def save_ply(path, P):
     P = np.asarray(P, np.float32)
@@ -107,15 +122,16 @@ VIDEO = list(up.keys())[0]
 print("video:", VIDEO)
 
 print("1/3 extracting frames..."); paths = extract_frames(VIDEO); print("   ", len(paths), "frames")
-print("2/3 reconstructing 3-D (GPU)..."); world = reconstruct(paths); print("   ", len(world), "points")
+print("2/3 reconstructing 3-D (GPU)..."); world, aruco_scale = reconstruct(paths); print("   ", len(world), "points")
 print("3/3 measuring volume...")
 save_ply("dense.ply", world)
-res = estimate_points(world, rim_radius_cm=75.0, views_png="kiln_views.png", heatmap_png="kiln_heatmap.png")
+res = estimate_points(world, rim_radius_cm=75.0, scale_cm_per_unit=aruco_scale, views_png="kiln_views.png", heatmap_png="kiln_heatmap.png")
 
 print("\\n" + "=" * 46)
 print(f"  BIOCHAR VOLUME : {res['volume_L']:6.0f} L    (~{res['weight_kg']:.0f} kg)")
 print(f"  fill level     : {res['fill_height_cm']:.0f} cm  ({res['fill_pct']:.0f}% of a ~1000 L kiln)")
 print(f"  cross-check    : {res['volume_L_flatfill']:6.0f} L   (should be close to the volume)")
+print(f"  scale from     : {res['scale_source']}")
 print(f"  SELF-CHECK     : {res['confidence'].upper()}")
 for w in res.get("warnings", []):
     print(f"    ! {w}")
