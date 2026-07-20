@@ -37,11 +37,6 @@ open("estimate_volume.py", "w", encoding="utf-8").write(base64.b64decode("__EST_
 open("aruco_tools.py", "w", encoding="utf-8").write(base64.b64decode("__ARUCO_B64__").decode("utf-8"))
 from estimate_volume import estimate_points
 import aruco_tools
-
-# >>> set this to the MEASURED edge length (cm) of your printed ArUco marker <<<
-# (if you are not using a marker yet, leave it - scale then falls back to the rim)
-MARKER_CM = 20.0
-
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -71,7 +66,15 @@ def extract_frames(video, n=40, out="frames"):
             cv2.imwrite(f"{out}/f_{k:03d}.jpg", best[2], [cv2.IMWRITE_JPEG_QUALITY, 95]); k += 1
     cap.release(); return sorted(glob.glob(f"{out}/*.jpg"))
 
-def reconstruct(paths):
+def save_ply(path, P):
+    P = np.asarray(P, np.float32)
+    hdr = ("ply\nformat binary_little_endian 1.0\n"
+           f"element vertex {len(P)}\n"
+           "property float x\nproperty float y\nproperty float z\nend_header\n")
+    with open(path, "wb") as f:
+        f.write(hdr.encode()); f.write(P.tobytes())
+
+def reconstruct(paths, marker_cm=0.0):
     dt = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
     imgs = load_and_preprocess_images(paths).to("cuda")
     with torch.no_grad(), torch.cuda.amp.autocast(dtype=dt):
@@ -86,14 +89,15 @@ def reconstruct(paths):
     cf = conf.squeeze(0).float().cpu().numpy()                    # [N,H,W]
 
     aruco_scale = None                                            # metric scale from markers (optional)
-    try:
-        im = imgs.detach().float().cpu().numpy().transpose(0, 2, 3, 1)          # [N,H,W,3]
-        u8 = [((a - a.min()) / (a.max() - a.min() + 1e-9) * 255).astype("uint8") for a in im]
-        rr = aruco_tools.scale_from_marker(u8, wp, MARKER_CM)
-        if rr:
-            aruco_scale = rr["scale_cm_per_unit"]; print("ArUco metric scale:", rr)
-    except Exception as e:
-        print("ArUco scale skipped:", e)
+    if marker_cm and marker_cm > 0:
+        try:
+            im = imgs.detach().float().cpu().numpy().transpose(0, 2, 3, 1)       # [N,H,W,3]
+            u8 = [((a - a.min()) / (a.max() - a.min() + 1e-9) * 255).astype("uint8") for a in im]
+            rr = aruco_tools.scale_from_marker(u8, wp, float(marker_cm))
+            if rr:
+                aruco_scale = rr["scale_cm_per_unit"]; print("ArUco metric scale:", rr)
+        except Exception as e:
+            print("ArUco scale skipped:", e)
 
     w = wp.reshape(-1, 3); cff = cf.reshape(-1)
     w = w[(cff >= np.quantile(cff, 0.5)) & np.isfinite(w).all(1)]
@@ -101,16 +105,18 @@ def reconstruct(paths):
         w = w[np.random.default_rng(0).choice(len(w), 300000, replace=False)]
     return w, aruco_scale
 
-def process(video):
+def process(video, marker_cm, rim_cm, density):
     if not video:
-        return "<p>Please upload a kiln video.</p>", None, None
+        return "<p>Please upload a kiln video.</p>", None, None, None
     try:
         paths = extract_frames(video)
-        world, aruco_scale = reconstruct(paths)
-        res = estimate_points(world, rim_radius_cm=75.0, scale_cm_per_unit=aruco_scale,
+        world, aruco_scale = reconstruct(paths, marker_cm)
+        save_ply("dense.ply", world)
+        res = estimate_points(world, rim_radius_cm=float(rim_cm), density=float(density),
+                              scale_cm_per_unit=aruco_scale,
                               views_png="views.png", heatmap_png="heatmap.png")
     except Exception as e:
-        return f"<p style='color:#b00'>Could not process this video: {e}</p>", None, None
+        return f"<p style='color:#b00'>Could not process this video: {e}</p>", None, None, None
     V, Vf = res["volume_L"], res["volume_L_flatfill"]
     fill = max(0, min(100, res["fill_pct"]))
     conf = res.get("confidence", "?")
@@ -128,17 +134,29 @@ def process(video):
       <div style="margin-top:10px;font-weight:700;color:{ccol}">Self-check: {conf.upper()}</div>
       {warn_html}
     </div>"""
-    return html, "views.png", "heatmap.png"
+    return html, "views.png", "heatmap.png", "dense.ply"
 
-demo = gr.Interface(
-    fn=process,
-    inputs=gr.Video(label="Upload a slow-orbit kiln video"),
-    outputs=[gr.HTML(label="Result"),
-             gr.Image(label="3-D reconstruction (top = rim disk, side = cone)"),
-             gr.Image(label="Biochar depth heatmap (volume = sum)")],
-    title="Kon-Tiki Biochar Volume - Video Dashboard",
-    description="Upload a slow orbit video of the biochar-filled kiln. It extracts frames, reconstructs the 3-D shape on GPU, and returns the biochar volume. Follow the capture SOP for best accuracy.")
-print("launching dashboard - a public https://....gradio.live link will appear below")
+with gr.Blocks(title="Kon-Tiki Biochar Volume") as demo:
+    gr.Markdown("# Kon-Tiki Biochar Volume - Video Platform")
+    gr.Markdown("Upload a slow-orbit video of the biochar-filled kiln to get the volume. "
+                "For TRUE scale, print & measure an ArUco marker and enter its edge size; "
+                "otherwise it uses the standard Kon-Tiki rim.")
+    with gr.Row():
+        with gr.Column():
+            vid = gr.Video(label="1 - Upload slow-orbit kiln video")
+            mk = gr.Number(value=0.0, label="ArUco marker edge (cm)  -  0 = no marker (use rim)")
+            rimn = gr.Number(value=75.0, label="Kiln rim RADIUS (cm)  -  75 for Kon-Tiki 1000")
+            dn = gr.Number(value=0.25, label="Biochar density (kg/L)")
+            go = gr.Button("Estimate biochar volume", variant="primary")
+        with gr.Column():
+            res_html = gr.HTML(label="Result")
+    with gr.Row():
+        img3d = gr.Image(label="3-D reconstruction (top = rim disk, side = cone)")
+        imgheat = gr.Image(label="Biochar depth heatmap (volume = sum)")
+    plyf = gr.File(label="Download 3-D cloud (dense.ply)")
+    go.click(process, [vid, mk, rimn, dn], [res_html, img3d, imgheat, plyf])
+
+print("launching platform - a public https://....gradio.live link will appear below")
 demo.launch(share=True)
 '''.replace("__EST_B64__", EST_B64).replace("__ARUCO_B64__", ARUCO_B64)
 
