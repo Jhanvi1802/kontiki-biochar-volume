@@ -1,4 +1,4 @@
-# Build the slow-video capture SOP as an editable Word document (.docx).
+ # Build the slow-video capture SOP as an editable Word document (.docx).
 import os
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches
